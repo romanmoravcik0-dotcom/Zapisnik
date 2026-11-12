@@ -131,21 +131,32 @@ function rebuild(){
   let b = START;
   for (const e of entries){ b += e.a; running.set(e.i, b); }
   const seen = new Map();
+  let afterPayout = false;
   for (const e of entries){
-    if (!seen.has(e.m)) seen.set(e.m, {p:e.m, payout:0, otherIn:0, out:0, entries:[]});
+    if (!seen.has(e.m)) seen.set(e.m, {p:e.m, payout:0, adj:0, otherIn:0, out:0, entries:[], payDate:null});
     const P = seen.get(e.m);
     P.entries.push(e);
-    if (isPayout(e)) P.payout += e.a;
+    if (isPayout(e)){ P.payout += e.a; if (!P.payDate && e.d) P.payDate = e.d; }
+    // a slip written right at the payout line belongs to the payout, not to spending —
+    // the notes count spending from the balance on the line after the payout
+    else if (e.fix && afterPayout) P.adj += e.a;
     else if (e.a > 0) P.otherIn += e.a;
     else P.out += -e.a;
+    afterPayout = isPayout(e);
   }
   periods = [...seen.values()];
   for (const P of periods){
-    P.net = P.payout + P.otherIn - P.out;
+    P.net = P.payout + P.adj + P.otherIn - P.out;
+    P.burn = P.out - P.otherIn;          // what the notes write as "(13.10.26 - 1180€)"
     P.end = running.get(P.entries[P.entries.length-1].i);
-    P.start = P.end - P.net;
+    P.start = P.end - P.net;             // the balance on the payout line itself
   }
 }
+const fullDay = iso => { const [y,m,d] = String(iso).split("-"); return +d + ". " + +m + ". " + y; };
+/* A period is named after the payout that opens it: its date when the notes
+   have one, else its month. */
+const payLabel = P => P.payDate ? fullDay(P.payDate) : monLabel(P.p);
+const isDated = P => /^\d{4}-\d{2}$/.test(P.p);
 const balance = () => entries.length ? running.get(entries[entries.length-1].i) : START;
 const byYear = y => entries.filter(e => yearOf(e.m) === y);
 const allYears = () => [...new Set(entries.map(e => yearOf(e.m)))].sort((a,b)=>a-b);
@@ -260,9 +271,10 @@ function renderHeader(){
   const P = periods[periods.length-1];
   renderBudget(P);
   if (!P){ $("pnote").textContent = "Zatiaľ žiadne položky."; return; }
-  const bits = ["Obdobie <b>" + monLabel(P.p) + "</b>"];
-  if (P.payout) bits.push("výplata <b>" + eur(P.payout) + "</b>");
-  bits.push("utratené <b>" + eur(P.out) + "</b>");
+  const bits = [];
+  if (P.payout) bits.push("Od výplaty <b>" + payLabel(P) + "</b> (" + eur(P.payout) + ")");
+  else bits.push("Obdobie <b>" + monLabel(P.p) + "</b>");
+  bits.push("minuté <b>" + eur(Math.max(0, P.burn)) + "</b>");
   $("pnote").innerHTML = bits.join(" · ");
 }
 
@@ -270,7 +282,7 @@ function renderBudget(P){
   const box = $("budget");
   if (!budget || !P){ box.hidden = true; return; }
   box.hidden = false;
-  const spent = P.out, left = budget - spent;
+  const spent = Math.max(0, P.burn), left = budget - spent;
   const pct = Math.max(0, Math.min(100, spent / budget * 100));
   $("bud-left").innerHTML = left >= 0
     ? "Zostáva <b>" + eur(left) + "</b>"
@@ -343,9 +355,9 @@ function renderLedger(){
       const dv = document.createElement("div");
       dv.className = "divider";
       dv.innerHTML = '<span class="dv-t"></span><span class="dv-l"></span><span class="dv-m"></span>';
-      dv.querySelector(".dv-t").textContent = monLabel(curP);
+      dv.querySelector(".dv-t").textContent = P.payout ? "Od výplaty " + payLabel(P) : (isDated(P) ? monLabel(curP) : curP);
       dv.querySelector(".dv-m").textContent =
-        (P.payout ? "výplata " + eur(P.payout) + " · " : "") + "utratené " + eur(P.out);
+        (P.payout ? "+" + eur(P.payout) + " · " : "") + "minuté " + eur(Math.max(0, P.burn));
       host.appendChild(dv);
       box = document.createElement("div"); box.className = "rows";
       host.appendChild(box);
@@ -366,30 +378,40 @@ function renderLedger(){
 function renderPeriods(){
   const host = $("v-periods");
   if (!periods.length){ host.innerHTML = '<div class="empty"><p>Obdobia sa vytvoria samé, keď zapíšeš výplatu.</p></div>'; return; }
-  const rows = periods.slice().reverse().map(P => {
-    const dated = /^\d{4}-\d{2}$/.test(P.p);
-    return "<tr><td>" + (dated ? monLabel(P.p) : P.p + " (bez mesiacov)") + "</td>" +
-      "<td>" + (P.payout ? eur(P.payout) : "—") + "</td>" +
-      "<td>" + (P.otherIn ? eur(P.otherIn) : "—") + "</td>" +
-      "<td>" + eur(P.out) + "</td>" +
-      '<td class="' + (P.net>0?"p":P.net<0?"n":"") + '">' + signed(P.net) + "</td>" +
-      "<td>" + eur(P.end) + "</td></tr>";
-  }).join("");
-  const done = periods.filter(P => P.payout);
-  const avgOut = done.length ? done.reduce((s,P)=>s+P.out,0)/done.length : 0;
+  // Read the way the notes are written: at each payout, what went out since
+  // the previous one, then what came in. "(13.10.26 - 1180€)" + "+2060 TMR".
+  const td = (v, cls) => '<td' + (cls ? ' class="' + cls + '"' : "") + ">" + v + "</td>";
+  const rows = [];
+  const last = periods[periods.length-1];
+  rows.push("<tr><td>Teraz</td>" + td(eur(Math.max(0, last.burn))) + td("—") + td(eur(balance())) + "</tr>");
+  for (let k = periods.length-1; k >= 0; k--){
+    const P = periods[k], prev = periods[k-1];
+    if (P.payout){
+      rows.push("<tr>" + td(payLabel(P)) +
+        td(!prev ? "—" : prev.burn >= 0 ? eur(prev.burn) : "+" + eur(-prev.burn) + " navyše", prev && prev.burn < 0 ? "p" : "") +
+        td("+" + eur(P.payout), "p") +
+        td(eur(P.start)) + "</tr>");
+    } else {
+      rows.push("<tr>" + td(isDated(P) ? monLabel(P.p) : P.p + " (bez mesiacov)") +
+        td("—") + td("—") + td(eur(P.start)) + "</tr>");
+    }
+  }
+  const done = periods.filter((P, k) => P.payout && k+1 < periods.length);   // closed windows only
   const avgPay = done.length ? done.reduce((s,P)=>s+P.payout,0)/done.length : 0;
+  const avgBurn = done.length ? done.reduce((s,P)=>s+P.burn,0)/done.length : 0;
   host.innerHTML =
     '<div class="card"><h2>Priemer na jedno výplatné obdobie</h2>' +
-    '<p class="sub">Z ' + done.length + ' období, v ktorých je zapísaná výplata.</p>' +
+    '<p class="sub">Z ' + done.length + ' uzavretých období medzi dvoma výplatami.</p>' +
     '<div class="kpis">' +
       '<div class="kpi"><span class="lbl">Výplata</span><span class="v num">' + eur(avgPay) + '</span></div>' +
-      '<div class="kpi"><span class="lbl">Výdavky</span><span class="v num">' + eur(avgOut) + '</span></div>' +
+      '<div class="kpi"><span class="lbl">Minuté</span><span class="v num">' + eur(avgBurn) + '</span></div>' +
       '<div class="kpi"><span class="lbl">Ostáva</span><span class="v num" style="color:' +
-        (avgPay-avgOut>0?"var(--pos)":"var(--neg)") + '">' + signed(avgPay-avgOut) + '</span></div>' +
+        (avgPay-avgBurn>0?"var(--pos)":"var(--neg)") + '">' + signed(avgPay-avgBurn) + '</span></div>' +
     '</div></div>' +
-    '<div class="tscroll"><table><caption>Obdobie je úsek od jednej výplaty po ďalšiu.</caption>' +
-    "<thead><tr><th>Obdobie</th><th>Výplata</th><th>Iné príjmy</th><th>Výdavky</th><th>Čistá zmena</th><th>Zostatok</th></tr></thead>" +
-    "<tbody>" + rows + "</tbody></table></div>";
+    '<div class="tscroll"><table><caption>Ako v poznámkach: pri každej výplate koľko si minul od tej predošlej, ' +
+    'koľko prišlo a aký bol zostatok tesne pred ňou.</caption>' +
+    "<thead><tr><th>Výplata</th><th>Minuté pred ňou</th><th>Prišlo</th><th>Zostatok</th></tr></thead>" +
+    "<tbody>" + rows.join("") + "</tbody></table></div>";
 }
 
 /* ---------- years ---------- */
@@ -586,20 +608,23 @@ function parseNotesLedger(text){
     else if (!period[j]) period[j] = mark || preYear;
   }
 
+  // Every line opens with the balance as it was written. Where that does not
+  // follow from the line above, the gap happened before this line — so it is
+  // booked into the period of the line above, even when this line is a payout.
+  // That keeps each period's total equal to the difference the notes show.
   const out = [];
-  let bal = rows[0].bal, seq = 0, lastRi = -1, pendingYear = null;
-  const yr = p => +String(p).slice(0,4);
+  let bal = rows[0].bal, seq = 0, lastRi = -1;
   for (let j = 0; j < flat.length; j++){
     const e = flat[j];
     if (e.ri !== lastRi){
       lastRi = e.ri;
       const diff = rows[e.ri].bal - bal;
-      const y = yr(period[j]);
-      let label = null;
-      if (Math.abs(diff) >= 50) label = "nezapísané (dorovnanie zostatku)";
-      else if (pendingYear !== null && y !== pendingYear && diff) label = "zaokrúhlenie za rok " + pendingYear;
-      if (label){ out.push({i: ++seq, a: diff, n: label, m: period[j], fix: 1}); bal += diff; }
-      pendingYear = y;
+      if (diff){
+        const m = out.length ? out[out.length-1].m : period[j];
+        out.push({i: ++seq, a: diff, m, fix: 1,
+                  n: Math.abs(diff) >= 50 ? "nezapísané (dorovnanie zostatku)" : "zaokrúhlenie"});
+        bal += diff;
+      }
     }
     out.push({i: ++seq, a: e.a, n: e.n, m: period[j], ...(e.d ? {d: e.d} : {})});
     bal += e.a;
