@@ -1,7 +1,7 @@
 /* Zápisník zostatku — service worker.
    The whole app is four small files, so cache them all on install and serve
    from the cache first. That is what lets the app open with no network. */
-const VERSION = "v9";
+const VERSION = "v10";
 const CACHE = "zapisnik-" + VERSION;
 const SHELL = [
   "./",

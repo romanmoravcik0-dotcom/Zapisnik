@@ -116,7 +116,8 @@ let running = new Map();
 let periods = [];
 let lastBackup = 0, storagePersisted = null, storageOk = true;
 let budgets = {};
-const IMPORT_V = 3;                 // bump when reading the notes changes
+let written = {};                   // period -> his own month total from the notes: {ex, all}
+const IMPORT_V = 4;                 // bump when reading the notes changes
 let importV = 0;                  // period -> budget, as written under each payout
 const pad2 = n => String(n).padStart(2,"0");
 function todayISO(){ const d = new Date(); return d.getFullYear() + "-" + pad2(d.getMonth()+1) + "-" + pad2(d.getDate()); }
@@ -154,6 +155,12 @@ function rebuild(){
     P.net = P.payout + P.adj + P.otherIn - P.out;
     P.burn = P.out - P.otherIn;          // with housing:    "…)1180€🏠"
     P.burnEx = P.burn - P.housing;       // without housing: "(13.10.26 - 980€)"
+    const w = written[P.p];              // the number he wrote himself, when there is one
+    if (w){
+      P.written = true;
+      if (w.all != null){ P.burnEx = w.ex; P.burn = w.all; }
+      else { P.burn = w.ex; P.burnEx = w.ex - P.housing; }
+    }
     P.end = running.get(P.entries[P.entries.length-1].i);
     P.start = P.end - P.net;             // the balance on the payout line itself
   }
@@ -188,7 +195,7 @@ function nextPeriodFor(items){
 }
 
 async function persist(){
-  const doc = {v:1, start:START, entries, lastBackup, payWords, budgets, importV};
+  const doc = {v:1, start:START, entries, lastBackup, payWords, budgets, written, importV};
   const a = await idbSet("ledger", doc);
   const b = lsSet(doc);
   const ok = a || b;
@@ -209,6 +216,7 @@ async function load(){
     lastBackup = doc.lastBackup || 0;
     if (Array.isArray(doc.payWords) && doc.payWords.length) payWords = doc.payWords;
     importV = typeof doc.importV === "number" ? doc.importV : 0;
+    written = doc.written && typeof doc.written === "object" ? doc.written : {};
     budgets = doc.budgets && typeof doc.budgets === "object" ? doc.budgets : {};
     if (typeof doc.budget === "number" && doc.budget > 0 && !Object.keys(budgets).length) legacyBudget = doc.budget;
   }
@@ -376,7 +384,8 @@ function renderLedger(){
   }
   host.innerHTML = "";
   if (!entries.length) return;
-  const list = entries.slice(-shown).reverse();
+  const visible = entries.filter(e => !e.fix);    // balancing rows stay in the sums, not on screen
+  const list = visible.slice(-shown).reverse();
   let box = null, curP = null;
   for (const e of list){
     if (e.m !== curP){
@@ -395,10 +404,10 @@ function renderLedger(){
     box.appendChild(rowEl(e));
     if (openEditor === e.i) box.appendChild(editorEl(e));
   }
-  if (entries.length > shown){
+  if (visible.length > shown){
     const b = document.createElement("button");
     b.className = "more"; b.type = "button";
-    b.textContent = "Zobraziť starších " + Math.min(120, entries.length - shown) + " položiek";
+    b.textContent = "Zobraziť starších " + Math.min(120, visible.length - shown) + " položiek";
     b.addEventListener("click", () => { shown += 120; render(); });
     host.appendChild(b);
   }
@@ -451,7 +460,8 @@ function renderPeriods(){
         '</span><span class="d">období v rozpočte</span></div>' : "") +
     '</div></div>' +
     '<div class="tscroll"><table><caption>Ako v poznámkach: pri každej výplate koľko si za mesiac minul ' +
-    '(bez bývania a s bývaním), aký bol rozpočet, koľko prišlo a zostatok tesne pred výplatou.</caption>' +
+    '(bez bývania a s bývaním), aký bol rozpočet, koľko prišlo a zostatok tesne pred výplatou. ' +
+    'Kde máš v poznámkach vlastný súčet v zátvorke, je tu presne ten.</caption>' +
     "<thead><tr><th>Výplata</th><th>Minuté</th><th>S bývaním</th><th>Rozpočet</th><th>Prišlo</th><th>Zostatok</th></tr></thead>" +
     "<tbody>" + rows.join("") + "</tbody></table></div>";
 }
@@ -582,6 +592,8 @@ function parseNotesLedger(text){
     // "(12.11.26)" on its own is this line's date, the way this app writes it;
     // "(13.10.26 - 980€)" is the note's own marker for the payout that follows.
     const dateOnly = /\(\s*\d{1,2}\.\d{1,2}\.\d{2,4}\s*\)\s*$/.test(rest);
+    const wm = /\(\s*\d{1,2}\.\d{1,2}\.\d{2,4}\.?\s*-?\s*(\d{1,2}\s?\d{3}|\d{1,4})\s*€\s*\)?\s*(?:(\d{1,2}\s?\d{3}|\d{1,4})\s*€\s*\u{1F3E0})?/u.exec(rest);
+    const rowWritten = wm ? {ex: parseInt(wm[1].replace(/\s/g,""),10), all: wm[2] ? parseInt(wm[2].replace(/\s/g,""),10) : null} : null;
     const cut = rest.search(/\(\s*\d{1,2}\.\d{1,2}/);
     if (cut >= 0) rest = rest.slice(0, cut);
     const bm = /^\s*\(\s*(\d{1,2}\s?\d{3}|\d{1,4})\s*€\s*\)/.exec(rest);
@@ -603,7 +615,7 @@ function parseNotesLedger(text){
       n: rest.slice(h.e, k+1 < hits.length ? hits[k+1].s : rest.length)
              .replace(/\s+/g," ").trim().replace(/^[.,/\\-]+|[.,/\\-]+$/g,"") || "výdavky"
     }));
-    rows.push({bal, items, dt, dtFull, dateOnly, header, budget: rowBudget, yearMark: yearMark ? +yearMark[1] : null});
+    rows.push({bal, items, dt, dtFull, dateOnly, header, budget: rowBudget, written: rowWritten, yearMark: yearMark ? +yearMark[1] : null});
   }
   if (rows.length < 2) return null;
 
@@ -656,7 +668,7 @@ function parseNotesLedger(text){
   // follow from the line above, the gap happened before this line — so it is
   // booked into the period of the line above, even when this line is a payout.
   // That keeps each period's total equal to the difference the notes show.
-  const budgetsOut = {};
+  const budgetsOut = {}, writtenOut = {};
   {
     const firstOfRow = new Map();
     flat.forEach((e, j) => { if (!firstOfRow.has(e.ri)) firstOfRow.set(e.ri, j); });
@@ -664,6 +676,7 @@ function parseNotesLedger(text){
     rows.forEach((r, ri) => {
       if (firstOfRow.has(ri)) lastP = period[firstOfRow.get(ri)];
       if (r.budget != null && lastP) budgetsOut[lastP] = r.budget;
+      if (r.written && lastP) writtenOut[lastP] = r.written;
     });
   }
 
@@ -691,6 +704,7 @@ function parseNotesLedger(text){
   }
   return {start: rows[0].bal, entries: out, end: bal,
           budgets: budgetsOut,
+          written: writtenOut,
           bigIncome: flat.filter(e => e.a >= 600).map(e => deacc(e.n)),
           stats: {rows: rows.length, items: flat.length, fixes: out.filter(o=>o.fix).length,
                  fixesBig: out.filter(o=>o.fix && Math.abs(o.a) >= 50).length, payouts: payIdx.length}};
@@ -739,7 +753,7 @@ function asText(){
 }
 function stamp(){ const d = new Date(); return d.toISOString().slice(0,10); }
 $("exp-json").addEventListener("click", async () => {
-  download("zapisnik-" + stamp() + ".json", JSON.stringify({v:1, start:START, entries, payWords, budgets}, null, 0), "application/json");
+  download("zapisnik-" + stamp() + ".json", JSON.stringify({v:1, start:START, entries, payWords, budgets, written}, null, 0), "application/json");
   lastBackup = Date.now(); await persist(); render();
 });
 $("exp-txt").addEventListener("click", () => download("zapisnik-" + stamp() + ".txt", asText(), "text/plain"));
@@ -790,6 +804,7 @@ $("imp-file").addEventListener("change", ev => {
       START = typeof d.start === "number" ? d.start : 0;
       if (Array.isArray(d.payWords) && d.payWords.length) payWords = d.payWords;
       budgets = d.budgets && typeof d.budgets === "object" ? d.budgets : {};
+      written = d.written && typeof d.written === "object" ? d.written : {};
       entries = clean; shown = 60; openEditor = null;
       rebuild(); await persist(); render();
       toast("Načítaných " + clean.length + " položiek. Zostatok " + eur(balance()) + ".");
@@ -828,8 +843,7 @@ $("notes-check").addEventListener("click", () => {
     "Našiel som " + s.items + " položiek v " + s.rows + " riadkoch, z toho " + s.payouts + " výplat. " +
     "Začiatok " + eur(notesDraft.start) + ", koniec " + eur(notesDraft.end) + ". " +
     (Object.keys(notesDraft.budgets).length ? "Rozpočtov pod výplatami: " + Object.keys(notesDraft.budgets).length + ". " : "") +
-    (s.fixesBig ? "Na " + s.fixesBig + " miestach zostatok v poznámkach preskočil o 50 € a viac — doplnil som tam riadok „nezapísané“. " : "") +
-    (s.fixes - s.fixesBig ? (s.fixes - s.fixesBig) + " drobných rozdielov som zarátal ako zaokrúhlenie. " : "") +
+    (Object.keys(notesDraft.written).length ? "Tvojich mesačných súčtov zo zátvoriek: " + Object.keys(notesDraft.written).length + ". " : "") +
     (s.payouts === 0 ? "Pozor: bez výplat appka nerozdelí históriu na mesiace, len na roky. Nastav vyššie slovo pre výplatu a skontroluj znova. " : "") +
     "Sedí ti koncový zostatok?";
 });
@@ -838,6 +852,7 @@ $("notes-apply").addEventListener("click", async () => {
   START = notesDraft.start;
   entries = notesDraft.entries;
   budgets = notesDraft.budgets || {};
+  written = notesDraft.written || {};
   importV = IMPORT_V;
   shown = 60; openEditor = null;
   rebuild(); await persist(); render();
