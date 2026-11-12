@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="sk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Zápisník zostatku</title>
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#FFFFFF" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#161C22" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Zápisník">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="apple-touch-icon" href="./icon-180.png">
+<link rel="icon" href="./icon-192.png">
+<style>
+/* Layout: phone-first single column — sticky balance + one-line input on top,
+   tabbed body below. Balance leads every row, the way the notes are written.
+   System type only: the app must open with no network at all. */
+:root{
+  --bg:#F4F6F8; --surface:#FFFFFF; --faint:#EDF1F4;
+  --ink:#141A20; --muted:#5D6B78; --rule:#DFE4E9;
+  --accent:#0E6FA8; --accent-soft:#E4EEF6;
+  --pos:#176B4F; --neg:#A33F2B;
+  --s1:#0E6FA8; --s2:#B8751A;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,Roboto,sans-serif;
+  --shadow:0 1px 2px rgba(20,26,32,.06),0 8px 24px -16px rgba(20,26,32,.18);
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0E1216; --surface:#161C22; --faint:#1C242B;
+  --ink:#E6EBEF; --muted:#94A3B0; --rule:#253038;
+  --accent:#55A7DC; --accent-soft:#17303F;
+  --pos:#46B087; --neg:#E08A72;
+  --s1:#3A8FC6; --s2:#BE8A24;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -16px rgba(0,0,0,.7);
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#0E1216; --surface:#161C22; --faint:#1C242B;
+  --ink:#E6EBEF; --muted:#94A3B0; --rule:#253038;
+  --accent:#55A7DC; --accent-soft:#17303F;
+  --pos:#46B087; --neg:#E08A72;
+  --s1:#3A8FC6; --s2:#BE8A24;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px -16px rgba(0,0,0,.7);
+  color-scheme:dark;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);background:var(--surface)}
+body{background:var(--bg);color:var(--ink);font-family:var(--font);font-size:15px;line-height:1.45;margin:0;
+  -webkit-text-size-adjust:100%;overscroll-behavior-y:none}
+img{max-width:100%}
+[hidden]{display:none!important}
+.wrap{max-width:720px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+h1,h2,h3{font-weight:600;text-wrap:balance;margin:0;letter-spacing:-.01em}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1}
+.lbl{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:600}
+
+header{position:sticky;top:0;z-index:9;background:var(--surface);border-bottom:1px solid var(--rule)}
+header .wrap{padding-block:14px 12px}
+.bal-row{display:flex;align-items:flex-end;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.bal{font-weight:700;font-size:clamp(32px,10vw,44px);line-height:1;letter-spacing:-.025em;font-variant-numeric:tabular-nums}
+.bal small{font-size:.45em;font-weight:600;color:var(--muted);margin-left:.25em;letter-spacing:0}
+.period-note{font-size:13px;color:var(--muted);margin-top:6px}
+.period-note b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
+form{display:flex;gap:8px;margin-top:12px}
+#entry{flex:1;min-width:0;font:inherit;font-size:16px;font-variant-numeric:tabular-nums;background:var(--bg);color:var(--ink);
+  border:1.5px solid var(--rule);border-radius:9px;padding:11px 12px;-webkit-appearance:none}
+#entry::placeholder{color:var(--muted);opacity:.85}
+#entry:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+button{font:inherit;font-weight:600;cursor:pointer;border-radius:9px;border:1px solid transparent;-webkit-appearance:none}
+.btn-add{background:var(--accent);color:#fff;padding:0 18px;flex:0 0 auto}
+.btn-add:disabled{opacity:.4;cursor:default}
+.chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.chip{background:var(--faint);color:var(--muted);border:1px solid var(--rule);border-radius:20px;padding:4px 11px;font-size:12.5px;font-weight:500}
+.preview{margin-top:9px;font-size:13.5px;display:flex;gap:10px;flex-wrap:wrap;align-items:baseline;min-height:20px}
+.pv-item{font-variant-numeric:tabular-nums;font-weight:600}
+.pv-after{color:var(--muted)}
+.pv-err{color:var(--neg)}
+
+nav{background:var(--bg)}
+.tabs{display:flex;gap:4px;padding-block:10px 2px;border-bottom:1px solid var(--rule)}
+.tab{background:none;color:var(--muted);padding:7px 13px;border-radius:8px 8px 0 0;font-size:14px;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab[aria-selected="true"]{color:var(--accent);border-bottom-color:var(--accent);background:var(--surface)}
+
+main .wrap{padding-block:16px 8px}
+.empty{background:var(--surface);border:1px dashed var(--rule);border-radius:12px;padding:28px 20px;text-align:center;color:var(--muted)}
+.empty h2{font-size:17px;color:var(--ink);margin-bottom:6px}
+
+.divider{display:flex;align-items:center;gap:10px;margin:18px 0 8px}
+.divider:first-child{margin-top:0}
+.divider .dv-t{font-weight:600;font-size:13px}
+.divider .dv-m{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;margin-left:auto;text-align:right}
+.divider .dv-l{flex:0 0 auto;height:1px;background:var(--rule);width:14px}
+.rows{background:var(--surface);border:1px solid var(--rule);border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
+.row{display:grid;grid-template-columns:4.6em 1fr auto;gap:10px;align-items:baseline;padding:9px 12px;border-top:1px solid var(--rule);width:100%;text-align:left;background:none;color:inherit;font:inherit;border-radius:0}
+.row:first-child{border-top:none}
+.row-bal{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.row-note{min-width:0;overflow-wrap:anywhere;font-size:14px}
+.row-cat{font-size:11px;color:var(--muted);display:block}
+.row-amt{font-variant-numeric:tabular-nums;font-weight:600;font-size:14.5px;white-space:nowrap}
+.row-amt.p{color:var(--pos)}.row-amt.n{color:var(--neg)}
+.row.fix .row-note{color:var(--muted);font-style:italic}
+.row.pay{background:var(--accent-soft)}
+.row.pay .row-note{font-weight:600}
+.more{display:block;width:100%;margin-top:10px;background:var(--surface);border:1px solid var(--rule);color:var(--accent);padding:10px;border-radius:10px}
+
+.editor{background:var(--faint);border-top:1px solid var(--rule);padding:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.editor input{font:inherit;font-size:16px;font-variant-numeric:tabular-nums;background:var(--surface);color:var(--ink);border:1px solid var(--rule);border-radius:7px;padding:8px 10px}
+.editor input.amt{width:7em}
+.editor input.note{flex:1;min-width:8em}
+.btn-sm{padding:8px 12px;font-size:13.5px;background:var(--surface);border:1px solid var(--rule);color:var(--ink)}
+.btn-sm.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+.btn-sm.danger{color:var(--neg);border-color:var(--neg)}
+
+.tscroll{overflow-x:auto;background:var(--surface);border:1px solid var(--rule);border-radius:12px;box-shadow:var(--shadow);-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;font-variant-numeric:tabular-nums;font-size:13.5px}
+th,td{padding:9px 11px;text-align:right;white-space:nowrap;border-top:1px solid var(--rule)}
+th{font-size:11px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);font-weight:600;border-top:none;position:sticky;top:0;background:var(--surface)}
+th:first-child,td:first-child{text-align:left;font-weight:600}
+td.p{color:var(--pos)}td.n{color:var(--neg)}
+caption{caption-side:top;text-align:left;padding:11px 11px 4px;font-size:12px;color:var(--muted)}
+
+.card{background:var(--surface);border:1px solid var(--rule);border-radius:12px;padding:15px;box-shadow:var(--shadow);margin-bottom:14px}
+.card h2{font-size:15px;margin-bottom:3px}
+.card .sub{font-size:12.5px;color:var(--muted);margin-bottom:12px}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px}
+.kpi .lbl{display:block;margin-bottom:3px}
+.kpi .v{display:block;font-weight:700;font-size:21px;font-variant-numeric:tabular-nums;line-height:1.2;letter-spacing:-.02em}
+.kpi .d{display:block;font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums;margin-top:2px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12.5px;color:var(--muted);margin-bottom:12px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:11px;height:11px;border-radius:2px;flex:0 0 auto}
+.gchart{display:flex;flex-direction:column;gap:9px}
+.grow{display:grid;grid-template-columns:2.1em 1fr;gap:9px;align-items:center}
+.gmon{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.gbars{display:flex;flex-direction:column;gap:2px;min-width:0}
+.gbar{display:flex;align-items:center;gap:6px;min-width:0}
+.gfill{height:9px;border-radius:0 4px 4px 0;flex:0 0 auto;min-width:2px}
+.gval{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.catbars{display:flex;flex-direction:column;gap:7px}
+.catrow{display:grid;grid-template-columns:1fr 4.6em;gap:9px;align-items:center;font-size:13px}
+.catname{min-width:0;overflow-wrap:anywhere}
+.cattrack{height:7px;background:var(--faint);border-radius:4px;overflow:hidden;margin-top:3px}
+.catfill{height:100%;background:var(--accent);border-radius:4px}
+.catval{text-align:right;font-variant-numeric:tabular-nums;color:var(--muted)}
+.sel{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:13px;color:var(--muted)}
+select{font:inherit;font-size:14px;background:var(--surface);color:var(--ink);border:1px solid var(--rule);border-radius:7px;padding:6px 8px}
+textarea{width:100%;font:inherit;font-size:16px;background:var(--bg);color:var(--ink);border:1px solid var(--rule);border-radius:9px;padding:10px;min-height:120px;resize:vertical}
+.btnrow{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.warn{background:#FDF0E6;color:#7A3B14;border-radius:9px;padding:10px 12px;font-size:12.5px;margin-bottom:12px}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .warn{background:#2E2314;color:#E6B87A}}
+:root[data-theme="dark"] .warn{background:#2E2314;color:#E6B87A}
+
+footer .wrap{padding-block:18px 28px;color:var(--muted);font-size:12.5px}
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);
+  padding:10px 16px;border-radius:999px;font-size:13.5px;font-weight:500;z-index:30;box-shadow:var(--shadow);max-width:calc(100% - 32px)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+@media (prefers-reduced-motion:no-preference){.gfill,.catfill{transition:width .3s ease}}
+@media (max-width:420px){.row{grid-template-columns:4.2em 1fr auto;gap:8px;padding:9px 10px}.bal-row{align-items:baseline}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="bal-row">
+      <div>
+        <span class="lbl">Zostatok</span>
+        <div class="bal num" id="bal">—</div>
+      </div>
+      <div style="text-align:right">
+        <span class="lbl">Tento rok</span>
+        <div class="num" id="ytd" style="font-weight:700;font-size:19px">—</div>
+      </div>
+    </div>
+    <div class="period-note" id="pnote">Načítavam…</div>
+    <form id="f" autocomplete="off">
+      <input id="entry" type="text" placeholder="-20 obed" aria-label="Nová položka"
+             autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done">
+      <button type="submit" class="btn-add" id="addbtn" disabled>Pridať</button>
+    </form>
+    <div class="chips" id="quick"></div>
+    <div class="preview" id="pv"></div>
+  </div>
+</header>
+
+<nav><div class="wrap"><div class="tabs" role="tablist">
+  <button class="tab" role="tab" id="t-ledger" aria-selected="true" aria-controls="v-ledger">Zápisník</button>
+  <button class="tab" role="tab" id="t-periods" aria-selected="false" aria-controls="v-periods">Obdobia</button>
+  <button class="tab" role="tab" id="t-years" aria-selected="false" aria-controls="v-years">Roky</button>
+  <button class="tab" role="tab" id="t-data" aria-selected="false" aria-controls="v-data">Dáta</button>
+</div></div></nav>
+
+<main>
+  <div class="wrap">
+    <section id="v-ledger" role="tabpanel" aria-labelledby="t-ledger">
+      <div class="empty" id="ld-empty" hidden>
+        <h2>Zápisník je prázdny</h2>
+        <p>Napíš hore prvú položku — napríklad <b>-20 obed</b> alebo <b>+1500 výplata</b>.<br>
+        Ak máš súbor so starým zápisníkom, načítaj ho v záložke <b>Dáta</b>.</p>
+      </div>
+      <div id="ld-list"></div>
+    </section>
+    <section id="v-periods" role="tabpanel" aria-labelledby="t-periods" hidden></section>
+    <section id="v-years" role="tabpanel" aria-labelledby="t-years" hidden></section>
+    <section id="v-data" role="tabpanel" aria-labelledby="t-data" hidden>
+      <div id="backup-warn"></div>
+      <div class="card">
+        <h2>Záloha</h2>
+        <p class="sub">Dáta sú uložené v tomto telefóne. Zálohu si odlož do Súborov alebo na iCloud —
+        ak zmažeš appku z plochy, iPhone môže zmazať aj dáta.</p>
+        <div class="btnrow">
+          <button class="btn-sm primary" id="exp-json">Uložiť zálohu (.json)</button>
+          <button class="btn-sm" id="exp-txt">Uložiť ako text (.txt)</button>
+        </div>
+        <p class="sub" id="backup-when" style="margin:10px 0 0"></p>
+      </div>
+      <div class="card">
+        <h2>Slovo pre výplatu</h2>
+        <p class="sub">Podľa neho appka pozná začiatok nového obdobia. Viac slov oddeľ čiarkou.
+        Nastav ho skôr, než vložíš zápisník.</p>
+        <div class="btnrow">
+          <input id="paywords" type="text" autocapitalize="off" autocorrect="off" spellcheck="false"
+                 style="font:inherit;font-size:16px;background:var(--bg);color:var(--ink);border:1px solid var(--rule);border-radius:7px;padding:8px 10px;flex:1;min-width:10em"
+                 aria-label="Slová pre výplatu">
+          <button class="btn-sm" id="paysave">Uložiť</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Vložiť zápisník z Poznámok</h2>
+        <p class="sub">Skopíruj celý text z Poznámok a vlož ho sem. Appka si poradí s tvojím zápisom —
+        zostatok na začiatku riadku, za ním položky. Nahradí celý zápisník.</p>
+        <textarea id="notes" placeholder="1 250€ - 20€ obed&#10;1 230€ - 35€ benzín&#10;1 195€ + 1 500€ výplata" aria-label="Text z Poznámok"></textarea>
+        <div class="btnrow">
+          <button class="btn-sm" id="notes-check">Skontrolovať</button>
+          <button class="btn-sm primary" id="notes-apply" hidden>Nahradiť zápisník</button>
+        </div>
+        <p class="sub" id="notes-info" style="margin:10px 0 0"></p>
+      </div>
+      <div class="card">
+        <h2>Načítať zo zálohy</h2>
+        <p class="sub">Súbor <b>.json</b> z tejto appky. Nahradí celý zápisník.</p>
+        <div class="btnrow">
+          <input type="file" id="imp-file" style="font-size:13px">
+        </div>
+      </div>
+      <div class="card">
+        <h2>Vložiť viac riadkov naraz</h2>
+        <p class="sub">Jeden riadok = jedna položka, presne ako v Poznámkach. Pridá sa na koniec zápisníka.</p>
+        <textarea id="bulk" placeholder="-20 obed&#10;-35 benzín&#10;+1500 výplata" aria-label="Riadky na vloženie"></textarea>
+        <div class="btnrow">
+          <button class="btn-sm primary" id="bulk-add">Pridať riadky</button>
+          <span class="sub" id="bulk-info" style="margin:0;align-self:center"></span>
+        </div>
+      </div>
+      <div class="card">
+        <h2>Začiatočný zostatok</h2>
+        <p class="sub">Suma na účte pred prvou položkou zápisníka.</p>
+        <div class="btnrow">
+          <input class="editor amt" id="startval" type="text" inputmode="numeric"
+                 style="font:inherit;font-size:16px;background:var(--bg);color:var(--ink);border:1px solid var(--rule);border-radius:7px;padding:8px 10px;width:8em"
+                 aria-label="Začiatočný zostatok">
+          <button class="btn-sm" id="startsave">Uložiť</button>
+        </div>
+      </div>
+      <div class="card">
+        <h2>O appke</h2>
+        <p class="sub" id="about" style="margin:0"></p>
+      </div>
+    </section>
+  </div>
+</main>
+
+<footer><div class="wrap"><span id="foot"></span></div></footer>
+
+<script src="./app.js"></script>
+</body>
+</html>
