@@ -456,8 +456,20 @@ function parseNotesLedger(text){
   const BAL = /^\s*(\d{1,2}[\s ]+\d{3}|\d{4,6}|\d{1,3})\s*€?/;
   const DATEG = /\(\s*(\d{1,2})\.(\d{1,2})\.(\d{2,4})/;
   const rows = [];
+  let header = null;
   for (const raw of String(text).replace(/−/g,"-").split("\n")){
     if (!raw.trim()) continue;
+    // "— október 2026 —" headings, the ones this app writes when it exports
+    const h = /^\s*[—–-]{1,2}\s*(.+?)\s*[—–-]{1,2}\s*$/.exec(raw);
+    if (h){
+      const t = deacc(h[1]).trim();
+      const ym = /^([a-z]+)\s+(\d{4})$/.exec(t);
+      if (ym){
+        const mi = MON.findIndex(n => deacc(n) === ym[1]);
+        if (mi >= 0){ header = ym[2] + "-" + String(mi+1).padStart(2,"0"); continue; }
+      }
+      if (/^\d{4}$/.test(t)){ header = t; continue; }
+    }
     const m = BAL.exec(raw);
     if (!m) continue;
     const bal = parseInt(m[1].replace(/[\s ]/g,""), 10);
@@ -485,7 +497,7 @@ function parseNotesLedger(text){
       n: rest.slice(h.e, k+1 < hits.length ? hits[k+1].s : rest.length)
              .replace(/\s+/g," ").trim().replace(/^[.,/\\-]+|[.,/\\-]+$/g,"") || "výdavky"
     }));
-    rows.push({bal, items, dt, yearMark: yearMark ? +yearMark[1] : null});
+    rows.push({bal, items, dt, header, yearMark: yearMark ? +yearMark[1] : null});
   }
   if (rows.length < 2) return null;
 
@@ -522,7 +534,8 @@ function parseNotesLedger(text){
   for (let j = 0; j < flat.length; j++){
     const r = rows[flat[j].ri];
     if (r.yearMark) mark = String(r.yearMark);
-    if (!period[j]) period[j] = mark || preYear;
+    if (r.header) period[j] = r.header;            // an exported heading is exact
+    else if (!period[j]) period[j] = mark || preYear;
   }
 
   const out = [];
@@ -578,6 +591,33 @@ $("exp-json").addEventListener("click", async () => {
   lastBackup = Date.now(); await persist(); render();
 });
 $("exp-txt").addEventListener("click", () => download("zapisnik-" + stamp() + ".txt", asText(), "text/plain"));
+
+async function markBackedUp(){ lastBackup = Date.now(); await persist(); render(); }
+async function copyLedger(){
+  try {
+    await navigator.clipboard.writeText(asText());
+    await markBackedUp();
+    toast("Skopírované. Otvor Poznámky, podrž prst a daj Prilepiť.");
+    return true;
+  } catch (e){ return false; }
+}
+$("exp-notes").addEventListener("click", async () => {
+  const text = asText();
+  if (navigator.share){
+    try {
+      await navigator.share({title: "Zápisník zostatku " + stamp(), text});
+      await markBackedUp();
+      toast("Odoslané. V Poznámkach to nájdeš ako novú poznámku.");
+      return;
+    } catch (err){
+      if (err && err.name === "AbortError") return;     // user closed the sheet
+    }
+  }
+  if (!(await copyLedger())) toast("Nepodarilo sa ani zdieľať, ani skopírovať. Použi radšej zálohu do súboru.");
+});
+$("exp-copy").addEventListener("click", async () => {
+  if (!(await copyLedger())) toast("Kopírovanie sa nepodarilo. Použi radšej zálohu do súboru.");
+});
 $("imp-file").addEventListener("change", ev => {
   const file = ev.target.files && ev.target.files[0];
   if (!file) return;
