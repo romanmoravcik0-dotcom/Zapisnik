@@ -610,7 +610,28 @@ function parseNotesLedger(text){
     if (endDiff){ out.push({i: ++seq, a: endDiff, n: "dorovnanie zostatku", m: out[out.length-1].m, fix: 1}); bal += endDiff; }
   }
   return {start: rows[0].bal, entries: out, end: bal,
+          bigIncome: flat.filter(e => e.a >= 600).map(e => deacc(e.n)),
           stats: {rows: rows.length, items: flat.length, fixes: out.filter(o=>o.fix).length, payouts: payIdx.length}};
+}
+
+/* When the payout word is not set, find it in the notes themselves: the word
+   that most often labels a large pay-in, plus its one-letter typos. */
+function lev(a, b){
+  const m = a.length, n = b.length, d = Array.from({length: m+1}, (_, i) => [i]);
+  for (let j = 1; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++) for (let j = 1; j <= n; j++)
+    d[i][j] = Math.min(d[i-1][j]+1, d[i][j-1]+1, d[i-1][j-1] + (a[i-1] === b[j-1] ? 0 : 1));
+  return d[m][n];
+}
+function detectPayWords(notes){
+  const first = notes.map(n => (n.split(/[^a-z0-9]+/).filter(Boolean)[0] || "")).filter(w => w.length >= 2);
+  const count = new Map();
+  for (const w of first) count.set(w, (count.get(w) || 0) + 1);
+  const ranked = [...count.entries()].sort((a, b) => b[1] - a[1]);
+  if (!ranked.length || ranked[0][1] < 3) return null;
+  const top = ranked[0][0];
+  const variants = [...count.keys()].filter(w => w !== top && lev(w, top) <= 1);
+  return [top, ...variants];
 }
 
 /* ---------- data tab ---------- */
@@ -705,12 +726,27 @@ $("notes-check").addEventListener("click", () => {
     $("notes-info").textContent = "Nenašiel som zápisník — čakám riadky, ktoré začínajú zostatkom, napríklad „1 250€ - 20€ obed“.";
     return;
   }
+  let detected = null;
+  if (notesDraft.stats.payouts < 3){
+    const words = detectPayWords(notesDraft.bigIncome);
+    if (words){
+      const before = payWords;
+      payWords = words;
+      const retry = parseNotesLedger($("notes").value);
+      if (retry && retry.stats.payouts >= 3){ notesDraft = retry; detected = words; }
+      else payWords = before;
+    }
+  }
   const s = notesDraft.stats;
   apply.hidden = false;
+  if (detected) $("paywords").value = detected.join(", ");
   $("notes-info").textContent =
+    (detected ? "Výplatu som spoznal podľa slova „" + detected[0] + "“" +
+       (detected.length > 1 ? " (aj „" + detected.slice(1).join("“, „") + "“)" : "") + ". " : "") +
     "Našiel som " + s.items + " položiek v " + s.rows + " riadkoch, z toho " + s.payouts + " výplat. " +
     "Začiatok " + eur(notesDraft.start) + ", koniec " + eur(notesDraft.end) + ". " +
     (s.fixes ? s.fixes + " riadkov som musel dorovnať — tam zostatok v poznámkach nesedel s položkami. " : "") +
+    (s.payouts === 0 ? "Pozor: bez výplat appka nerozdelí históriu na mesiace, len na roky. Nastav vyššie slovo pre výplatu a skontroluj znova. " : "") +
     "Sedí ti koncový zostatok?";
 });
 $("notes-apply").addEventListener("click", async () => {
