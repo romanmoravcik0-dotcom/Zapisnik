@@ -115,7 +115,7 @@ let entries = [];                 // [{i,a,n,m,fix?}] ordered by i
 let running = new Map();
 let periods = [];
 let lastBackup = 0, storagePersisted = null, storageOk = true;
-let budget = 0;
+let budgets = {};                  // period -> budget, as written under each payout
 const pad2 = n => String(n).padStart(2,"0");
 function todayISO(){ const d = new Date(); return d.getFullYear() + "-" + pad2(d.getMonth()+1) + "-" + pad2(d.getDate()); }
 function dayLabel(iso){
@@ -125,6 +125,9 @@ function dayLabel(iso){
 }
 let shown = 60, openEditor = null, tab = "ledger";
 
+/* Housing is what the notes mark with the house sign — kept apart so that
+   "minuté" reads like the first number in "(13.10.26 - 980€)1180€🏠". */
+const isHousing = e => e.a < 0 && (/\u{1F3E0}/u.test(e.n) || /byvanie|najom/.test(deacc(e.n)));
 function rebuild(){
   entries.sort((a,b)=>a.i-b.i);
   running = new Map();
@@ -133,7 +136,7 @@ function rebuild(){
   const seen = new Map();
   let afterPayout = false;
   for (const e of entries){
-    if (!seen.has(e.m)) seen.set(e.m, {p:e.m, payout:0, adj:0, otherIn:0, out:0, entries:[], payDate:null});
+    if (!seen.has(e.m)) seen.set(e.m, {p:e.m, payout:0, adj:0, otherIn:0, out:0, housing:0, entries:[], payDate:null});
     const P = seen.get(e.m);
     P.entries.push(e);
     if (isPayout(e)){ P.payout += e.a; if (!P.payDate && e.d) P.payDate = e.d; }
@@ -141,13 +144,14 @@ function rebuild(){
     // the notes count spending from the balance on the line after the payout
     else if (e.fix && afterPayout) P.adj += e.a;
     else if (e.a > 0) P.otherIn += e.a;
-    else P.out += -e.a;
+    else { P.out += -e.a; if (isHousing(e)) P.housing += -e.a; }
     afterPayout = isPayout(e);
   }
   periods = [...seen.values()];
   for (const P of periods){
     P.net = P.payout + P.adj + P.otherIn - P.out;
-    P.burn = P.out - P.otherIn;          // what the notes write as "(13.10.26 - 1180€)"
+    P.burn = P.out - P.otherIn;          // with housing:    "…)1180€🏠"
+    P.burnEx = P.burn - P.housing;       // without housing: "(13.10.26 - 980€)"
     P.end = running.get(P.entries[P.entries.length-1].i);
     P.start = P.end - P.net;             // the balance on the payout line itself
   }
@@ -157,6 +161,14 @@ const fullDay = iso => { const [y,m,d] = String(iso).split("-"); return +d + ". 
    have one, else its month. */
 const payLabel = P => P.payDate ? fullDay(P.payDate) : monLabel(P.p);
 const isDated = P => /^\d{4}-\d{2}$/.test(P.p);
+/* The budget written under a payout holds until a later payout sets another. */
+function budgetFor(P){
+  for (let k = periods.indexOf(P); k >= 0; k--){
+    const v = budgets[periods[k].p];
+    if (typeof v === "number") return v;
+  }
+  return 0;
+}
 const balance = () => entries.length ? running.get(entries[entries.length-1].i) : START;
 const byYear = y => entries.filter(e => yearOf(e.m) === y);
 const allYears = () => [...new Set(entries.map(e => yearOf(e.m)))].sort((a,b)=>a-b);
@@ -174,7 +186,7 @@ function nextPeriodFor(items){
 }
 
 async function persist(){
-  const doc = {v:1, start:START, entries, lastBackup, payWords, budget};
+  const doc = {v:1, start:START, entries, lastBackup, payWords, budgets};
   const a = await idbSet("ledger", doc);
   const b = lsSet(doc);
   const ok = a || b;
@@ -194,10 +206,13 @@ async function load(){
     entries = doc.entries;
     lastBackup = doc.lastBackup || 0;
     if (Array.isArray(doc.payWords) && doc.payWords.length) payWords = doc.payWords;
-    budget = typeof doc.budget === "number" ? doc.budget : 0;
+    budgets = doc.budgets && typeof doc.budgets === "object" ? doc.budgets : {};
+    if (typeof doc.budget === "number" && doc.budget > 0 && !Object.keys(budgets).length) legacyBudget = doc.budget;
   }
   rebuild();
+  if (legacyBudget && periods.length){ budgets[periods[periods.length-1].p] = legacyBudget; legacyBudget = 0; }
 }
+let legacyBudget = 0;
 
 /* ---------- mutations ---------- */
 async function addItems(items){
@@ -274,15 +289,18 @@ function renderHeader(){
   const bits = [];
   if (P.payout) bits.push("Od výplaty <b>" + payLabel(P) + "</b> (" + eur(P.payout) + ")");
   else bits.push("Obdobie <b>" + monLabel(P.p) + "</b>");
-  bits.push("minuté <b>" + eur(Math.max(0, P.burn)) + "</b>");
+  if (!budgetFor(P)) bits.push("minuté <b>" + eur(Math.max(0, P.burnEx)) + "</b>");
+  bits.push("s bývaním <b>" + eur(Math.max(0, P.burn)) + "</b>");
   $("pnote").innerHTML = bits.join(" · ");
 }
 
 function renderBudget(P){
   const box = $("budget");
+  const budget = P ? budgetFor(P) : 0;
+  $("bud-set").hidden = !P || !!budget;
   if (!budget || !P){ box.hidden = true; return; }
   box.hidden = false;
-  const spent = Math.max(0, P.burn), left = budget - spent;
+  const spent = Math.max(0, P.burnEx), left = budget - spent;
   const pct = Math.max(0, Math.min(100, spent / budget * 100));
   $("bud-left").innerHTML = left >= 0
     ? "Zostáva <b>" + eur(left) + "</b>"
@@ -357,7 +375,7 @@ function renderLedger(){
       dv.innerHTML = '<span class="dv-t"></span><span class="dv-l"></span><span class="dv-m"></span>';
       dv.querySelector(".dv-t").textContent = P.payout ? "Od výplaty " + payLabel(P) : (isDated(P) ? monLabel(curP) : curP);
       dv.querySelector(".dv-m").textContent =
-        (P.payout ? "+" + eur(P.payout) + " · " : "") + "minuté " + eur(Math.max(0, P.burn));
+        (P.payout ? "+" + eur(P.payout) + " · " : "") + "minuté " + eur(Math.max(0, P.burnEx));
       host.appendChild(dv);
       box = document.createElement("div"); box.className = "rows";
       host.appendChild(box);
@@ -378,39 +396,51 @@ function renderLedger(){
 function renderPeriods(){
   const host = $("v-periods");
   if (!periods.length){ host.innerHTML = '<div class="empty"><p>Obdobia sa vytvoria samé, keď zapíšeš výplatu.</p></div>'; return; }
-  // Read the way the notes are written: at each payout, what went out since
-  // the previous one, then what came in. "(13.10.26 - 1180€)" + "+2060 TMR".
+  // Read the way the notes are written: at each payout, what the month cost
+  // without and with housing — "(13.10.26 - 980€)1180€🏠" — against the budget
+  // set under the previous payout, then what came in.
   const td = (v, cls) => '<td' + (cls ? ' class="' + cls + '"' : "") + ">" + v + "</td>";
+  const money = v => v >= 0 ? eur(v) : "+" + eur(-v);
+  const spentCells = P => {
+    if (!P) return td("—") + td("—") + td("—");
+    const b = budgetFor(P);
+    const over = b && P.burnEx > b;
+    return td(money(P.burnEx), b ? (over ? "n" : "p") : (P.burnEx < 0 ? "p" : "")) +
+           td(money(P.burn)) +
+           td(b ? eur(b) : "—");
+  };
   const rows = [];
   const last = periods[periods.length-1];
-  rows.push("<tr><td>Teraz</td>" + td(eur(Math.max(0, last.burn))) + td("—") + td(eur(balance())) + "</tr>");
+  rows.push("<tr><td>Teraz</td>" + spentCells(last) + td("—") + td(eur(balance())) + "</tr>");
   for (let k = periods.length-1; k >= 0; k--){
     const P = periods[k], prev = periods[k-1];
     if (P.payout){
-      rows.push("<tr>" + td(payLabel(P)) +
-        td(!prev ? "—" : prev.burn >= 0 ? eur(prev.burn) : "+" + eur(-prev.burn) + " navyše", prev && prev.burn < 0 ? "p" : "") +
-        td("+" + eur(P.payout), "p") +
-        td(eur(P.start)) + "</tr>");
+      rows.push("<tr>" + td(payLabel(P)) + spentCells(prev) + td("+" + eur(P.payout), "p") + td(eur(P.start)) + "</tr>");
     } else {
       rows.push("<tr>" + td(isDated(P) ? monLabel(P.p) : P.p + " (bez mesiacov)") +
-        td("—") + td("—") + td(eur(P.start)) + "</tr>");
+        td("—") + td("—") + td("—") + td("—") + td(eur(P.start)) + "</tr>");
     }
   }
   const done = periods.filter((P, k) => P.payout && k+1 < periods.length);   // closed windows only
-  const avgPay = done.length ? done.reduce((s,P)=>s+P.payout,0)/done.length : 0;
-  const avgBurn = done.length ? done.reduce((s,P)=>s+P.burn,0)/done.length : 0;
+  const avg = f => done.length ? done.reduce((s,P)=>s+f(P),0)/done.length : 0;
+  const avgPay = avg(P=>P.payout), avgEx = avg(P=>P.burnEx), avgAll = avg(P=>P.burn);
+  const withB = done.filter(P => budgetFor(P));
+  const kept = withB.filter(P => P.burnEx <= budgetFor(P)).length;
   host.innerHTML =
     '<div class="card"><h2>Priemer na jedno výplatné obdobie</h2>' +
     '<p class="sub">Z ' + done.length + ' uzavretých období medzi dvoma výplatami.</p>' +
     '<div class="kpis">' +
       '<div class="kpi"><span class="lbl">Výplata</span><span class="v num">' + eur(avgPay) + '</span></div>' +
-      '<div class="kpi"><span class="lbl">Minuté</span><span class="v num">' + eur(avgBurn) + '</span></div>' +
+      '<div class="kpi"><span class="lbl">Minuté</span><span class="v num">' + eur(avgEx) + '</span>' +
+        '<span class="d">s bývaním ' + eur(avgAll) + '</span></div>' +
       '<div class="kpi"><span class="lbl">Ostáva</span><span class="v num" style="color:' +
-        (avgPay-avgBurn>0?"var(--pos)":"var(--neg)") + '">' + signed(avgPay-avgBurn) + '</span></div>' +
+        (avgPay-avgAll>0?"var(--pos)":"var(--neg)") + '">' + signed(avgPay-avgAll) + '</span></div>' +
+      (withB.length ? '<div class="kpi"><span class="lbl">Rozpočet</span><span class="v num">' + kept + " z " + withB.length +
+        '</span><span class="d">období v rozpočte</span></div>' : "") +
     '</div></div>' +
-    '<div class="tscroll"><table><caption>Ako v poznámkach: pri každej výplate koľko si minul od tej predošlej, ' +
-    'koľko prišlo a aký bol zostatok tesne pred ňou.</caption>' +
-    "<thead><tr><th>Výplata</th><th>Minuté pred ňou</th><th>Prišlo</th><th>Zostatok</th></tr></thead>" +
+    '<div class="tscroll"><table><caption>Ako v poznámkach: pri každej výplate koľko si za mesiac minul ' +
+    '(bez bývania a s bývaním), aký bol rozpočet, koľko prišlo a zostatok tesne pred výplatou.</caption>' +
+    "<thead><tr><th>Výplata</th><th>Minuté</th><th>S bývaním</th><th>Rozpočet</th><th>Prišlo</th><th>Zostatok</th></tr></thead>" +
     "<tbody>" + rows.join("") + "</tbody></table></div>";
 }
 
@@ -542,6 +572,8 @@ function parseNotesLedger(text){
     const dateOnly = /\(\s*\d{1,2}\.\d{1,2}\.\d{2,4}\s*\)\s*$/.test(rest);
     const cut = rest.search(/\(\s*\d{1,2}\.\d{1,2}/);
     if (cut >= 0) rest = rest.slice(0, cut);
+    const bm = /^\s*\(\s*(\d{1,2}\s?\d{3}|\d{1,4})\s*€\s*\)/.exec(rest);
+    const rowBudget = bm ? parseInt(bm[1].replace(/\s/g,""), 10) : null;
     rest = rest.replace(/\([^)]*\)/g, " ").replace(/\([^)]*$/, " ");
     const AMT = /([+\-])?\s*(\d{1,2}\s?\d{3}|\d{1,4})\s*(€)?/g;
     const hits = [];
@@ -559,7 +591,7 @@ function parseNotesLedger(text){
       n: rest.slice(h.e, k+1 < hits.length ? hits[k+1].s : rest.length)
              .replace(/\s+/g," ").trim().replace(/^[.,/\\-]+|[.,/\\-]+$/g,"") || "výdavky"
     }));
-    rows.push({bal, items, dt, dtFull, dateOnly, header, yearMark: yearMark ? +yearMark[1] : null});
+    rows.push({bal, items, dt, dtFull, dateOnly, header, budget: rowBudget, yearMark: yearMark ? +yearMark[1] : null});
   }
   if (rows.length < 2) return null;
 
@@ -612,6 +644,17 @@ function parseNotesLedger(text){
   // follow from the line above, the gap happened before this line — so it is
   // booked into the period of the line above, even when this line is a payout.
   // That keeps each period's total equal to the difference the notes show.
+  const budgetsOut = {};
+  {
+    const firstOfRow = new Map();
+    flat.forEach((e, j) => { if (!firstOfRow.has(e.ri)) firstOfRow.set(e.ri, j); });
+    let lastP = null;
+    rows.forEach((r, ri) => {
+      if (firstOfRow.has(ri)) lastP = period[firstOfRow.get(ri)];
+      if (r.budget != null && lastP) budgetsOut[lastP] = r.budget;
+    });
+  }
+
   const out = [];
   let bal = rows[0].bal, seq = 0, lastRi = -1;
   for (let j = 0; j < flat.length; j++){
@@ -635,8 +678,10 @@ function parseNotesLedger(text){
     if (endDiff){ out.push({i: ++seq, a: endDiff, n: "dorovnanie zostatku", m: out[out.length-1].m, fix: 1}); bal += endDiff; }
   }
   return {start: rows[0].bal, entries: out, end: bal,
+          budgets: budgetsOut,
           bigIncome: flat.filter(e => e.a >= 600).map(e => deacc(e.n)),
-          stats: {rows: rows.length, items: flat.length, fixes: out.filter(o=>o.fix).length, payouts: payIdx.length}};
+          stats: {rows: rows.length, items: flat.length, fixes: out.filter(o=>o.fix).length,
+                 fixesBig: out.filter(o=>o.fix && Math.abs(o.a) >= 50).length, payouts: payIdx.length}};
 }
 
 /* When the payout word is not set, find it in the notes themselves: the word
@@ -682,7 +727,7 @@ function asText(){
 }
 function stamp(){ const d = new Date(); return d.toISOString().slice(0,10); }
 $("exp-json").addEventListener("click", async () => {
-  download("zapisnik-" + stamp() + ".json", JSON.stringify({v:1, start:START, entries, payWords, budget}, null, 0), "application/json");
+  download("zapisnik-" + stamp() + ".json", JSON.stringify({v:1, start:START, entries, payWords, budgets}, null, 0), "application/json");
   lastBackup = Date.now(); await persist(); render();
 });
 $("exp-txt").addEventListener("click", () => download("zapisnik-" + stamp() + ".txt", asText(), "text/plain"));
@@ -732,7 +777,7 @@ $("imp-file").addEventListener("change", ev => {
       if (!clean.length) throw new Error("prázdne");
       START = typeof d.start === "number" ? d.start : 0;
       if (Array.isArray(d.payWords) && d.payWords.length) payWords = d.payWords;
-      if (typeof d.budget === "number") budget = d.budget;
+      budgets = d.budgets && typeof d.budgets === "object" ? d.budgets : {};
       entries = clean; shown = 60; openEditor = null;
       rebuild(); await persist(); render();
       toast("Načítaných " + clean.length + " položiek. Zostatok " + eur(balance()) + ".");
@@ -770,7 +815,9 @@ $("notes-check").addEventListener("click", () => {
        (detected.length > 1 ? " (aj „" + detected.slice(1).join("“, „") + "“)" : "") + ". " : "") +
     "Našiel som " + s.items + " položiek v " + s.rows + " riadkoch, z toho " + s.payouts + " výplat. " +
     "Začiatok " + eur(notesDraft.start) + ", koniec " + eur(notesDraft.end) + ". " +
-    (s.fixes ? s.fixes + " riadkov som musel dorovnať — tam zostatok v poznámkach nesedel s položkami. " : "") +
+    (Object.keys(notesDraft.budgets).length ? "Rozpočtov pod výplatami: " + Object.keys(notesDraft.budgets).length + ". " : "") +
+    (s.fixesBig ? "Na " + s.fixesBig + " miestach zostatok v poznámkach preskočil o 50 € a viac — doplnil som tam riadok „nezapísané“. " : "") +
+    (s.fixes - s.fixesBig ? (s.fixes - s.fixesBig) + " drobných rozdielov som zarátal ako zaokrúhlenie. " : "") +
     (s.payouts === 0 ? "Pozor: bez výplat appka nerozdelí históriu na mesiace, len na roky. Nastav vyššie slovo pre výplatu a skontroluj znova. " : "") +
     "Sedí ti koncový zostatok?";
 });
@@ -778,6 +825,7 @@ $("notes-apply").addEventListener("click", async () => {
   if (!notesDraft) return;
   START = notesDraft.start;
   entries = notesDraft.entries;
+  budgets = notesDraft.budgets || {};
   shown = 60; openEditor = null;
   rebuild(); await persist(); render();
   $("notes").value = ""; $("notes-apply").hidden = true;
@@ -795,12 +843,21 @@ $("bulk-add").addEventListener("click", async () => {
   $("bulk-info").textContent = "Pridaných " + items.length + " položiek.";
   toast("Pridaných " + items.length + " položiek.");
 });
+function goToBudget(){
+  $("t-data").click();
+  setTimeout(() => { const f = $("budgetval"); f.focus(); f.select(); }, 60);
+}
+$("bud-set").addEventListener("click", goToBudget);
+$("budget").addEventListener("click", goToBudget);
+$("budget").addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " "){ ev.preventDefault(); goToBudget(); } });
 $("budgetsave").addEventListener("click", async () => {
   const raw = String($("budgetval").value).replace(",",".").replace(/\s/g,"").trim();
   const v = raw === "" ? 0 : Math.round(parseFloat(raw));
   if (!isFinite(v) || v < 0){ toast("Zadaj číslo, alebo nechaj prázdne pre vypnutie."); return; }
-  budget = v; await persist(); render();
-  toast(v ? "Rozpočet na obdobie je " + eur(v) + "." : "Rozpočet vypnutý.");
+  const P = periods[periods.length-1];
+  if (!P){ toast("Najprv zapíš aspoň jednu položku."); return; }
+  budgets[P.p] = v; await persist(); render();
+  toast(v ? "Rozpočet od výplaty " + payLabel(P) + " je " + eur(v) + "." : "Rozpočet pre toto obdobie vypnutý.");
 });
 $("paysave").addEventListener("click", async () => {
   const words = String($("paywords").value).split(",").map(w => deacc(w).trim()).filter(Boolean);
@@ -818,7 +875,10 @@ $("startsave").addEventListener("click", async () => {
 function renderData(){
   $("startval").value = String(START);
   $("paywords").value = payWords.join(", ");
-  $("budgetval").value = budget ? String(budget) : "";
+  const curP = periods[periods.length-1];
+  const curB = curP ? budgetFor(curP) : 0;
+  $("budgetval").value = curB ? String(curB) : "";
+  $("budget-for").textContent = curP && curP.payout ? "od výplaty " + payLabel(curP) : "pre toto obdobie";
   const days = lastBackup ? Math.floor((Date.now()-lastBackup)/86400000) : null;
   $("backup-when").textContent = lastBackup
     ? "Naposledy zálohované " + (days === 0 ? "dnes" : "pred " + days + " dňami") + "."

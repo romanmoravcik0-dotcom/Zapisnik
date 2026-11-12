@@ -62,7 +62,8 @@ header .wrap{padding-block:14px 12px}
 .bal small{font-size:.45em;font-weight:600;color:var(--muted);margin-left:.25em;letter-spacing:0}
 .period-note{font-size:13px;color:var(--muted);margin-top:6px}
 .period-note b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;white-space:nowrap}
-.bud{margin-top:10px}
+.bud{margin-top:10px;cursor:pointer}
+.bud-set{margin-top:9px;background:none;border:1px dashed var(--rule);color:var(--accent);padding:6px 11px;font-size:12.5px;border-radius:8px;font-weight:500}
 .bud-row{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;margin-bottom:5px;font-variant-numeric:tabular-nums}
 .bud-row b{font-weight:600}
 .bud-of{color:var(--muted)}
@@ -182,10 +183,11 @@ footer .wrap{padding-block:18px 28px;color:var(--muted);font-size:12.5px}
       </div>
     </div>
     <div class="period-note" id="pnote">Načítavam…</div>
-    <div class="bud" id="budget" hidden>
+    <div class="bud" id="budget" hidden role="button" tabindex="0" aria-label="Zmeniť rozpočet">
       <div class="bud-row"><span id="bud-left"></span><span id="bud-of"></span></div>
       <div class="bud-track"><div class="bud-fill" id="bud-fill"></div></div>
     </div>
+    <button type="button" class="bud-set" id="bud-set" hidden>Nastaviť rozpočet na toto obdobie</button>
     <form id="f" autocomplete="off">
       <input id="entry" type="text" placeholder="-20 obed" aria-label="Nová položka"
              autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="done">
@@ -233,9 +235,9 @@ footer .wrap{padding-block:18px 28px;color:var(--muted);font-size:12.5px}
         <p class="sub" id="backup-when" style="margin:10px 0 0"></p>
       </div>
       <div class="card">
-        <h2>Rozpočet na obdobie</h2>
-        <p class="sub">Koľko chceš minúť medzi dvoma výplatami. Appka z neho odratáva, čo minieš —
-        vrátené peniaze sa ti doň vrátia. Po každej výplate začína odznova. Prázdne pole rozpočet vypne.</p>
+        <h2>Rozpočet <span id="budget-for" style="font-weight:500;color:var(--muted)"></span></h2>
+        <p class="sub">Koľko chceš minúť do ďalšej výplaty, bez bývania — ako číslo v zátvorke pod výplatou
+        v poznámkach. Platí, kým pri ďalšej výplate nenastavíš iný. Prázdne pole ho pre toto obdobie vypne.</p>
         <div class="btnrow">
           <input id="budgetval" type="text" inputmode="numeric"
                  style="font:inherit;font-size:16px;background:var(--bg);color:var(--ink);border:1px solid var(--rule);border-radius:7px;padding:8px 10px;width:8em"
