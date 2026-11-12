@@ -115,7 +115,9 @@ let entries = [];                 // [{i,a,n,m,fix?}] ordered by i
 let running = new Map();
 let periods = [];
 let lastBackup = 0, storagePersisted = null, storageOk = true;
-let budgets = {};                  // period -> budget, as written under each payout
+let budgets = {};
+const IMPORT_V = 3;                 // bump when reading the notes changes
+let importV = 0;                  // period -> budget, as written under each payout
 const pad2 = n => String(n).padStart(2,"0");
 function todayISO(){ const d = new Date(); return d.getFullYear() + "-" + pad2(d.getMonth()+1) + "-" + pad2(d.getDate()); }
 function dayLabel(iso){
@@ -186,7 +188,7 @@ function nextPeriodFor(items){
 }
 
 async function persist(){
-  const doc = {v:1, start:START, entries, lastBackup, payWords, budgets};
+  const doc = {v:1, start:START, entries, lastBackup, payWords, budgets, importV};
   const a = await idbSet("ledger", doc);
   const b = lsSet(doc);
   const ok = a || b;
@@ -206,6 +208,7 @@ async function load(){
     entries = doc.entries;
     lastBackup = doc.lastBackup || 0;
     if (Array.isArray(doc.payWords) && doc.payWords.length) payWords = doc.payWords;
+    importV = typeof doc.importV === "number" ? doc.importV : 0;
     budgets = doc.budgets && typeof doc.budgets === "object" ? doc.budgets : {};
     if (typeof doc.budget === "number" && doc.budget > 0 && !Object.keys(budgets).length) legacyBudget = doc.budget;
   }
@@ -318,7 +321,7 @@ function rowEl(e){
   btn.type = "button";
   btn.className = "row" + (e.fix ? " fix" : "") + (isPayout(e) ? " pay" : "");
   btn.innerHTML =
-    '<span class="row-bal">' + NF.format(Math.round(running.get(e.i))) + '</span>' +
+    '<span class="row-bal">' + NF.format(Math.round(running.get(e.i) - e.a)) + '</span>' +
     '<span class="row-note"></span>' +
     '<span class="row-amt ' + (e.a>0?"p":"n") + '">' + signed(e.a) + '</span>';
   const note = btn.querySelector(".row-note");
@@ -362,6 +365,15 @@ function editorEl(e){
 function renderLedger(){
   const host = $("ld-list");
   $("ld-empty").hidden = entries.length > 0;
+  { const o = $("old-import"); if (o) o.remove(); }
+  if (importV < IMPORT_V && entries.some(e => e.fix)){
+    const w = document.createElement("div");
+    w.className = "warn";
+    w.innerHTML = "Históriu si vložil staršou verziou appky, ktorá z poznámok počítala niektoré sumy zle. " +
+      "Choď do <b>Dáta</b> a vlož poznámky znova — potom budú zostatky aj minuté sedieť.";
+    $("ld-list").before(w);
+    w.id = "old-import";
+  }
   host.innerHTML = "";
   if (!entries.length) return;
   const list = entries.slice(-shown).reverse();
@@ -826,6 +838,7 @@ $("notes-apply").addEventListener("click", async () => {
   START = notesDraft.start;
   entries = notesDraft.entries;
   budgets = notesDraft.budgets || {};
+  importV = IMPORT_V;
   shown = 60; openEditor = null;
   rebuild(); await persist(); render();
   $("notes").value = ""; $("notes-apply").hidden = true;
