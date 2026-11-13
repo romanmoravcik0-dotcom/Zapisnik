@@ -130,6 +130,7 @@ let shown = 60, openEditor = null, tab = "ledger";
 
 /* Housing is what the notes mark with the house sign — kept apart so that
    "minuté" reads like the first number in "(13.10.26 - 980€)1180€🏠". */
+const isRefund = e => e.a > 0 && /vraten/.test(deacc(e.n));
 const isHousing = e => e.a < 0 && (/\u{1F3E0}/u.test(e.n) || /byvanie|najom/.test(deacc(e.n)));
 function rebuild(){
   entries.sort((a,b)=>a.i-b.i);
@@ -139,14 +140,17 @@ function rebuild(){
   const seen = new Map();
   let afterPayout = false;
   for (const e of entries){
-    if (!seen.has(e.m)) seen.set(e.m, {p:e.m, payout:0, adj:0, otherIn:0, out:0, housing:0, spent:0, entries:[], payDate:null});
+    if (!seen.has(e.m)) seen.set(e.m, {p:e.m, payout:0, adj:0, otherIn:0, out:0, housing:0, spent:0, refund:0, entries:[], payDate:null});
     const P = seen.get(e.m);
     P.entries.push(e);
     if (isPayout(e)){ P.payout += e.a; if (!P.payDate && e.d) P.payDate = e.d; }
     // a slip written right at the payout line belongs to the payout, not to spending —
     // the notes count spending from the balance on the line after the payout
     else if (e.fix && afterPayout) P.adj += e.a;
-    else if (e.a > 0) P.otherIn += e.a;
+    else if (e.a > 0){
+      P.otherIn += e.a;
+      if (!e.fix && isRefund(e)) P.refund += e.a;
+    }
     else {
       P.out += -e.a;
       if (isHousing(e)) P.housing += -e.a;
@@ -157,10 +161,10 @@ function rebuild(){
   periods = [...seen.values()];
   for (const P of periods){
     P.net = P.payout + P.adj + P.otherIn - P.out;
-    // Spent = the minus entries only. Money that comes in does not give the
-    // budget anything back; it shows in the balance, not here.
-    P.burn = P.spent;                    // with housing:    "…)1180€🏠"
-    P.burnEx = P.spent - P.housing;      // without housing: "(13.10.26 - 980€)"
+    // Spent = the minus entries. Money coming in does not give the budget
+    // anything back — except a "vrátenie", which undoes a spend.
+    P.burn = P.spent - P.refund;         // with housing:    "…)1180€🏠"
+    P.burnEx = P.burn - P.housing;       // without housing: "(13.10.26 - 980€)"
     const w = written[P.p];              // the number he wrote himself, when there is one
     if (w){
       P.written = true;
