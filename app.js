@@ -939,7 +939,7 @@ function renderData(){
     "Dáta sú len v tomto telefóne, nikam sa neposielajú. " +
     (storagePersisted === true ? "iPhone ich má označené ako trvalé. "
      : storagePersisted === false ? "iPhone ich zatiaľ nemá označené ako trvalé — zálohuj pravidelne. " : "") +
-    "Appka funguje aj bez internetu.";
+    "Appka funguje aj bez internetu. Verzia " + APP_VERSION + ".";
 }
 
 /* ---------- quick chips from his own most-used notes ---------- */
@@ -990,6 +990,8 @@ for (const id of ["ledger","periods","years","data"]){
   });
 }
 
+const APP_VERSION = "v13";
+
 /* ---------- boot ---------- */
 (async () => {
   await load();
@@ -1001,7 +1003,40 @@ for (const id of ["ledger","periods","years","data"]){
     }
   } catch (e) { storagePersisted = null; }
   if (tab === "data") renderData();
-  if ("serviceWorker" in navigator){
-    try { await navigator.serviceWorker.register("./sw.js"); } catch (e) {}
-  }
+  if ("serviceWorker" in navigator) setUpUpdates();
 })();
+
+/* ---------- updates ----------
+   iOS often wakes a home-screen app instead of starting it again, so nothing
+   would ever ask for a new version. Ask on every wake, and when one arrives,
+   switch to it — unless something half-typed would be lost. */
+async function setUpUpdates(){
+  const hadController = !!navigator.serviceWorker.controller;
+  let reg = null;
+  try { reg = await navigator.serviceWorker.register("./sw.js", {updateViaCache: "none"}); } catch (e) { return; }
+  const check = () => { if (reg && navigator.onLine !== false) reg.update().catch(() => {}); };
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") check(); });
+  window.addEventListener("online", check);
+  let switching = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController || switching) return;          // first install: nothing to switch from
+    const busy = entryEl.value.trim() || openEditor !== null ||
+                 $("notes").value.trim() || $("bulk").value.trim();
+    if (busy){ showUpdateBar(); return; }
+    switching = true;
+    location.reload();
+  });
+}
+function showUpdateBar(){
+  if ($("update-bar")) return;
+  const bar = document.createElement("div");
+  bar.id = "update-bar"; bar.className = "toast"; bar.setAttribute("role","status");
+  bar.style.display = "flex"; bar.style.gap = "10px"; bar.style.alignItems = "center";
+  bar.textContent = "Nová verzia je pripravená.";
+  const b = document.createElement("button");
+  b.type = "button"; b.textContent = "Obnoviť";
+  b.style.cssText = "background:var(--accent);color:#fff;padding:5px 12px;border-radius:999px;font-size:13px";
+  b.addEventListener("click", () => location.reload());
+  bar.appendChild(b);
+  document.body.appendChild(bar);
+}
