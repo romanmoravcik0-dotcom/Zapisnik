@@ -139,7 +139,7 @@ function rebuild(){
   const seen = new Map();
   let afterPayout = false;
   for (const e of entries){
-    if (!seen.has(e.m)) seen.set(e.m, {p:e.m, payout:0, adj:0, otherIn:0, out:0, housing:0, entries:[], payDate:null});
+    if (!seen.has(e.m)) seen.set(e.m, {p:e.m, payout:0, adj:0, otherIn:0, out:0, housing:0, spent:0, entries:[], payDate:null});
     const P = seen.get(e.m);
     P.entries.push(e);
     if (isPayout(e)){ P.payout += e.a; if (!P.payDate && e.d) P.payDate = e.d; }
@@ -147,14 +147,20 @@ function rebuild(){
     // the notes count spending from the balance on the line after the payout
     else if (e.fix && afterPayout) P.adj += e.a;
     else if (e.a > 0) P.otherIn += e.a;
-    else { P.out += -e.a; if (isHousing(e)) P.housing += -e.a; }
+    else {
+      P.out += -e.a;
+      if (isHousing(e)) P.housing += -e.a;
+      if (!e.fix) P.spent += -e.a;       // only what he wrote with a minus
+    }
     afterPayout = isPayout(e);
   }
   periods = [...seen.values()];
   for (const P of periods){
     P.net = P.payout + P.adj + P.otherIn - P.out;
-    P.burn = P.out - P.otherIn;          // with housing:    "…)1180€🏠"
-    P.burnEx = P.burn - P.housing;       // without housing: "(13.10.26 - 980€)"
+    // Spent = the minus entries only. Money that comes in does not give the
+    // budget anything back; it shows in the balance, not here.
+    P.burn = P.spent;                    // with housing:    "…)1180€🏠"
+    P.burnEx = P.spent - P.housing;      // without housing: "(13.10.26 - 980€)"
     const w = written[P.p];              // the number he wrote himself, when there is one
     if (w){
       P.written = true;
